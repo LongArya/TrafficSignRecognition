@@ -14,7 +14,7 @@ from matplotlib.figure import Figure
 from datetime import datetime
 
 
-class RussianTrafficSignDataset(Dataset):
+class RussianTrafficSignBaseDataset(Dataset):
     def __init__(self, coco_ann_file: str, images_root: str) -> None:
         self.images_root = images_root
         self.coco_ann_file = coco_ann_file
@@ -47,8 +47,8 @@ class RussianTrafficSignDataset(Dataset):
                 continue
             ann_ids: List[str] = coco_annotaions.getAnnIds(imgIds=image_info["id"])
             image_annotations: List[Dict] = coco_annotaions.loadAnns(ann_ids)
-            sample_datetime = RussianTrafficSignDataset.extract_datetime_from_filename(
-                image_path
+            sample_datetime = (
+                RussianTrafficSignBaseDataset.extract_datetime_from_filename(image_path)
             )
             for image_annotation in image_annotations:
                 sample_info = {
@@ -65,3 +65,35 @@ class RussianTrafficSignDataset(Dataset):
 
     def __getitem__(self, index) -> Any:
         return self.samples_info[index]
+
+
+class SquareCropReader(Dataset):
+    def __init__(self, base_dataset: RussianTrafficSignBaseDataset) -> None:
+        self._base_dataset = base_dataset
+        super().__init__()
+
+    def __len__(self) -> int:
+        return len(self._base_dataset)
+
+    def __getitem__(self, index: int) -> Dict:
+        base_sample = self._base_dataset[index]
+        image: np.ndarray = cv2.imread(base_sample["image_path"])
+        image = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
+        image_height, image_width = image.shape[:2]
+        x1, y1, w, h = base_sample["bbox"]
+        xc = x1 + w // 2
+        yc = y1 + h // 2
+        crop_size: int = max(w, h)
+
+        crop_x1 = xc - crop_size // 2
+        crop_x2 = xc + crop_size // 2
+        crop_y1 = yc - crop_size // 2
+        crop_y2 = yc + crop_size // 2
+        crop_x1 = np.clip(crop_x1, 0, image_width - 1)
+        crop_x2 = np.clip(crop_x2, 0, image_width - 1)
+        crop_y1 = np.clip(crop_y1, 0, image_height - 1)
+        crop_y2 = np.clip(crop_y2, 0, image_height - 1)
+
+        image_crop = image[crop_y1 : crop_y2 + 1, crop_x1 : crop_x2 + 1, :]
+        base_sample["image"] = image_crop
+        return base_sample
