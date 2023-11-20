@@ -18,7 +18,9 @@ from .data_split import DataSplit
 from .classification_result_dataframe import ClassificationResultsDataframe
 from .model_line import ModelLine
 from .metrics_utils import generate_confusion_matrix_plot_from_classification_results
+from ..loggers.clearml_logger import ClearMLLogger
 import torchvision.transforms as tf
+from functools import partial
 
 
 def init_static_gesture_classifier(cfg: TrafficSignTrainerConfig) -> nn.Module:
@@ -127,9 +129,12 @@ class TrafficSignsClassifier(pl.LightningModule):
         self.cfg = cfg
         self.criterion = init_loss_from_config(cfg.train_hyperparams)
         self.model = init_static_gesture_classifier(self.cfg)
+        results_dataframe_initalizer = partial(
+            init_classification_results_dataframe, label_enum=self.cfg.model.label_enum
+        )
         self.predictions_on_datasets: Dict[
             DataSplit, ClassificationResultsDataframe
-        ] = defaultdict(init_classification_results_dataframe)
+        ] = defaultdict(results_dataframe_initalizer)
         self.results_location = results_location
 
     def forward(self, inputs: torch.Tensor):
@@ -237,7 +242,7 @@ class TrafficSignsClassifier(pl.LightningModule):
         classification_results: ClassificationResultsDataframe,
         log_path: str,
     ) -> None:
-        """Uploads confusion matrix to neptune"""
+        """Uploads confusion matrix to ClearML"""
         fig, ax = plt.subplots()
         ax = generate_confusion_matrix_plot_from_classification_results(
             classification_results, ax
@@ -246,10 +251,23 @@ class TrafficSignsClassifier(pl.LightningModule):
         raise NotImplementedError("TODO log conf mat to ClearML")
 
     def _log_metrics_to_clearml(
+        self,
         val_predictions: ClassificationResultsDataframe,
     ) -> None:
-        # TODO implement
-        raise NotImplementedError()
+        gt = val_predictions.ground_true.tolist()
+        pred = val_predictions.prediction.tolist()
+        labels_names = self.cfg.model.label_enum.values()
+        val_classification_report = classification_report(
+            y_true=gt, y_pred=pred, labels=labels_names, output_dict=True
+        )
+        if not isinstance(self.logger, ClearMLLogger):
+            raise ValueError("Only ClearML logger is supported")
+
+        self.logger.log_classification_report(
+            sklearn_classifcation_report=val_classification_report,
+            class_names=labels_names,
+            step=0,
+        )
 
     def on_validation_epoch_end(self) -> None:
         self._log_metrics_to_clearml(
