@@ -18,7 +18,7 @@ from .data_split import DataSplit
 from .classification_result_dataframe import ClassificationResultsDataframe
 from .model_line import ModelLine
 from .metrics_utils import generate_confusion_matrix_plot_from_classification_results
-from ..loggers.clearml_logger import ClearMLLogger
+from loggers.clearml_logger import ClearMLLogger
 import torchvision.transforms as tf
 from functools import partial
 
