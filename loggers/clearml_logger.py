@@ -39,7 +39,7 @@ def log_classififcation_report_to_clearml(
 
 class ClearMLLogger(Logger):
     def __init__(self, clearml_logger: ClearMLLogger):
-        self._clearml_logger = clearml_logger
+        self._clearml_logger: Logger = clearml_logger
 
     @property
     def name(self):
