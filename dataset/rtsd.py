@@ -1,3 +1,4 @@
+from PIL import Image
 import os
 import json
 from collections import defaultdict
@@ -102,5 +103,6 @@ class SquareCropReader(Dataset):
         crop_y2 = np.clip(crop_y2, 0, image_height - 1)
 
         image_crop = image[crop_y1 : crop_y2 + 1, crop_x1 : crop_x2 + 1, :]
-        base_sample["image"] = image_crop
+        base_sample["image"] = Image.fromarray(image_crop)
+
         return base_sample
