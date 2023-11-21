@@ -1,0 +1,4 @@
+defaults:
+  - augs: conservative_augs
+  - train_hyperparams: default_hyperparameters
+  - model: resnet18

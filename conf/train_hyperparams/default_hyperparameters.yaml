@@ -1,0 +1,8 @@
+device: "cuda"
+learinig_rate: 0.001
+momentun: 0.9
+scheduler_type: "plateau"
+patience_epochs_num: 10  
+lr_reduction_factor: 0.1  
+loss: "focal"
+focal_loss_gamma: 5
