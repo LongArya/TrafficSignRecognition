@@ -13,6 +13,9 @@ class LabelEnumApplier(Dataset):
         self.label_enum_id2name = label_enum_id2name
         self.label_enum_name2id = {name: id for id, name in label_enum_id2name.items()}
 
+    def __len__(self) -> int:
+        return len(self._base_dataset)
+
     def __getitem__(self, index: int) -> Dict:
         sample = self._base_dataset[index]
         sample_class_name = sample["class_name"]
