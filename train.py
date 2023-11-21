@@ -1,4 +1,6 @@
 import os
+from collections import defaultdict
+from tqdm import tqdm
 import pandas as pd
 from dataset import (
     RussianTrafficSignBaseDataset,
@@ -32,7 +34,14 @@ WORKSPACE_DIR = os.path.dirname(SCRIPT_DIR)
 CFG_ROOT = os.path.join(SCRIPT_DIR, "conf")
 CFG_NAME = "traffic_sign_classification_config"
 TRAIN_RESULTS_ROOT = os.path.join(WORKSPACE_DIR, "training_results")
-
+RTSD_DS_ROOT = os.path.join(WORKSPACE_DIR, "archive")
+print(f"RTSD_DS_ROOT = {RTSD_DS_ROOT}")
+RTSD_IMG_ROOT = os.path.join(RTSD_DS_ROOT, "rtsd-frames")
+VAL_ANN_FILE = os.path.join(RTSD_DS_ROOT, "val_anno.json")
+TRAIN_ANN_FILE = os.path.join(RTSD_DS_ROOT, "train_anno.json")
+RTSD_LABELS_MAP_FILE = os.path.join(RTSD_DS_ROOT, "label_map.json")
+BG_NUM_IN_DATASET = 100
+MAX_AMOUNT_OF_SAMPLES_OF_ONE_CLASS = 1000
 
 os.environ["HYDRA_FULL_ERROR"] = "1"
 
@@ -41,13 +50,10 @@ cs.store(name=CFG_NAME, node=TrafficSignTrainerConfig)
 
 
 def load_dummy_dataset(label_enum: Dict[int, str]) -> Dataset:
-    val_coco_file: str = "E:\\ITMO\\TrafficSignsCV\\archive (1)\\val_anno.json"
-    images_root: str = "E:\\ITMO\\TrafficSignsCV\\archive (1)\\rtsd-frames"
-    label_map_file: str = "E:\\ITMO\\TrafficSignsCV\\archive (1)\\label_map.json"
     dataset = RussianTrafficSignBaseDataset(
-        coco_ann_file=val_coco_file,
-        images_root=images_root,
-        label_map_file=label_map_file,
+        coco_ann_file=VAL_ANN_FILE,
+        images_root=RTSD_IMG_ROOT,
+        label_map_file=RTSD_LABELS_MAP_FILE,
     )
     dataset = LabelEnumApplier(dataset, label_enum_id2name=label_enum)
     dataset = SquareCropReader(dataset)
@@ -55,12 +61,54 @@ def load_dummy_dataset(label_enum: Dict[int, str]) -> Dataset:
     return dataset
 
 
+def limit_bg_num_in_dataset(dataset: Dataset, bg_num: int) -> Dataset:
+    used_indexes: List[int] = []
+    bg_indexes: List[int] = []
+    for index, sample in enumerate(tqdm(dataset)):
+        if sample["class_name"] != "background":
+            used_indexes.append(index)
+        else:
+            bg_indexes.append(index)
+    used_indexes.extend(bg_indexes[:bg_num])
+    return Subset(dataset, used_indexes)
+
+
+def limit_class_num_in_dataset(dataset: Dataset, max_class_presence: int) -> Dataset:
+    classes_presence_indexes = defaultdict(list)
+    for index, sample in enumerate(tqdm(dataset)):
+        classes_presence_indexes[sample["class_name"]].append(index)
+    used_indexes = []
+    for class_name, class_indexes in classes_presence_indexes.items():
+        used_indexes.extend(class_indexes[:max_class_presence])
+    return Subset(dataset, used_indexes)
+
+
 def load_train_dataset(label_enum: Dict[int, str]) -> Dataset:
-    return load_dummy_dataset(label_enum)
+    dataset = RussianTrafficSignBaseDataset(
+        coco_ann_file=TRAIN_ANN_FILE,
+        images_root=RTSD_IMG_ROOT,
+        label_map_file=RTSD_LABELS_MAP_FILE,
+    )
+    dataset = LabelEnumApplier(dataset, label_enum_id2name=label_enum)
+    dataset = limit_class_num_in_dataset(
+        dataset, max_class_presence=MAX_AMOUNT_OF_SAMPLES_OF_ONE_CLASS
+    )
+    dataset = SquareCropReader(dataset)
+    return dataset
 
 
 def load_val_dataset(label_enum: Dict[int, str]) -> Dataset:
-    return load_dummy_dataset(label_enum)
+    dataset = RussianTrafficSignBaseDataset(
+        coco_ann_file=VAL_ANN_FILE,
+        images_root=RTSD_IMG_ROOT,
+        label_map_file=RTSD_LABELS_MAP_FILE,
+    )
+    dataset = LabelEnumApplier(dataset, label_enum_id2name=label_enum)
+    dataset = limit_class_num_in_dataset(
+        dataset, max_class_presence=MAX_AMOUNT_OF_SAMPLES_OF_ONE_CLASS
+    )
+    dataset = SquareCropReader(dataset)
+    return dataset
 
 
 def custom_collate(batch: List[Dict[str, Any]]) -> Dict[str, Any]:
@@ -127,13 +175,8 @@ def train_static_gesture(cfg: TrafficSignTrainerConfig):
     val_dataset = TransformApplier(
         dataset=val_dataset, transformation=augmentations[DataSplit.VAL]
     )
-    # log_info_about_datasets_to_neptune(
-    #     train_dataset=train_dataset,
-    #     val_dataset=val_dataset,
-    #     neptune_run=neptune_logger.experiment,
-    #     logged_samples_amount=10,
-    #     augs_config=cfg.augs,
-    # )
+    print(f"TRAIN DS LEN = {len(train_dataset)}")
+    print(f"VAL DS LEN = {len(val_dataset)}")
     dummy_output_directory = os.path.join(model_line.root, "dummy_output")
     os.makedirs(dummy_output_directory, exist_ok=True)
 
