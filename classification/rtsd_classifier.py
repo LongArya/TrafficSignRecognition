@@ -25,9 +25,10 @@ from functools import partial
 
 def init_static_gesture_classifier(cfg: TrafficSignTrainerConfig) -> nn.Module:
     """Initializes neural network for static gesture classification, based on config values"""
+    classes_num = len(cfg.model.label_enum)
     if cfg.model.architecture == "resnet18":
         model = resnet18(pretrained=cfg.model.use_pretrained)
-        model.fc = nn.Linear(model.fc.in_features, cfg.model.classes_num)
+        model.fc = nn.Linear(model.fc.in_features, classes_num)
         return model
     else:
         raise NotImplementedError(f"Unknown architecture: {cfg.model.architecture}")
@@ -127,14 +128,14 @@ class TrafficSignsClassifier(pl.LightningModule):
     ):
         super().__init__()
         self.cfg = cfg
-        self.criterion = init_loss_from_config(cfg.train_hyperparams)
+        self.criterion = init_loss_from_config(cfg)
         self.model = init_static_gesture_classifier(self.cfg)
-        results_dataframe_initalizer = partial(
+        self.results_dataframe_initalizer = partial(
             init_classification_results_dataframe, label_enum=self.cfg.model.label_enum
         )
         self.predictions_on_datasets: Dict[
             DataSplit, ClassificationResultsDataframe
-        ] = defaultdict(results_dataframe_initalizer)
+        ] = defaultdict(self.results_dataframe_initalizer)
         self.results_location = results_location
 
     def forward(self, inputs: torch.Tensor):
@@ -179,8 +180,8 @@ class TrafficSignsClassifier(pl.LightningModule):
         for path, gt_class, pred_class, pred_score, single_image_probabilities in zip(
             images_paths, gt_classes, pred_classes, predictions_scores, probs
         ):
-            gt_label = self.cfg.model.label_enum(gt_class.item())
-            pred_label = self.cfg.model.label_enum(pred_class.item())
+            gt_label = self.cfg.model.label_enum[gt_class.item()]
+            pred_label = self.cfg.model.label_enum[pred_class.item()]
             batch_predictions.append(
                 [path, gt_label, pred_label, pred_score.item()]
                 + [prob.item() for prob in single_image_probabilities]
@@ -196,7 +197,7 @@ class TrafficSignsClassifier(pl.LightningModule):
 
     def training_step(self, batch, batch_idx):
         inputs = batch["image"]
-        gt_labels = batch["label"]
+        gt_labels = batch["class"]
         images_paths = batch["image_path"]
         pred_labels = self.model(inputs)
         self._append_predictions_to_split(
@@ -213,7 +214,7 @@ class TrafficSignsClassifier(pl.LightningModule):
 
     def validation_step(self, batch, batch_idx):
         inputs = batch["image"]
-        gt_labels = batch["label"]
+        gt_labels = batch["class"]
         images_paths = batch["image_path"]
         pred_labels = self.model(inputs)
         # save gt, preds to table
@@ -234,7 +235,7 @@ class TrafficSignsClassifier(pl.LightningModule):
         # refresh results
         self.predictions_on_datasets[
             DataSplit.TRAIN
-        ] = init_classification_results_dataframe()
+        ] = self.results_dataframe_initalizer()
         return super().on_train_epoch_end()
 
     def _log_conf_matrix_to_clearml(
@@ -256,7 +257,7 @@ class TrafficSignsClassifier(pl.LightningModule):
     ) -> None:
         gt = val_predictions.ground_true.tolist()
         pred = val_predictions.prediction.tolist()
-        labels_names = self.cfg.model.label_enum.values()
+        labels_names = list(self.cfg.model.label_enum.values())
         val_classification_report = classification_report(
             y_true=gt, y_pred=pred, labels=labels_names, output_dict=True
         )
@@ -266,7 +267,10 @@ class TrafficSignsClassifier(pl.LightningModule):
         self.logger.log_classification_report(
             sklearn_classifcation_report=val_classification_report,
             class_names=labels_names,
-            step=0,
+            step=self.current_epoch,
+        )
+        self.log(
+            "val_weighted_F1", val_classification_report["weighted avg"]["f1-score"]
         )
 
     def on_validation_epoch_end(self) -> None:
@@ -281,7 +285,7 @@ class TrafficSignsClassifier(pl.LightningModule):
         # refresh predictions
         self.predictions_on_datasets[
             DataSplit.VAL
-        ] = init_classification_results_dataframe()
+        ] = self.results_dataframe_initalizer()
 
         return super().on_validation_epoch_end()
 

@@ -36,14 +36,6 @@ def log_classififcation_report_to_clearml(
                 iteration=iteration,
             )
 
-    # log accuracy
-    clearml_logger.report_scalar(
-        title="accuracy",
-        series="accuracy",
-        iteration=iteration,
-        value=classification_report["accuracy"],
-    )
-
 
 class ClearMLLogger(Logger):
     def __init__(self, clearml_logger: ClearMLLogger):
