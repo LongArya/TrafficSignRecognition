@@ -1,7 +1,18 @@
 import os
-from dataset import RussianTrafficSignBaseDataset, SquareCropReader, TransformApplier
+import pandas as pd
+from dataset import (
+    RussianTrafficSignBaseDataset,
+    SquareCropReader,
+    TransformApplier,
+    LabelEnumApplier,
+)
 from pprint import pprint
-from classification import TrafficSignsClassifier, ModelLine, TrafficSignTrainerConfig
+from classification import (
+    TrafficSignsClassifier,
+    ModelLine,
+    TrafficSignTrainerConfig,
+    DataSplit,
+)
 from classification.rtsd_classifier import init_augmentations_from_config
 from callbacks import DummyInferenceCallback
 from torch.utils.data import Dataset, Subset, default_collate, DataLoader
@@ -11,44 +22,87 @@ from typing import List, Dict, Any
 import clearml
 from clearml import Task
 import hydra
+from hydra.core.config_store import ConfigStore
 from loggers.clearml_logger import ClearMLLogger
-
+import torch
+import datetime
 
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 WORKSPACE_DIR = os.path.dirname(SCRIPT_DIR)
+CFG_ROOT = os.path.join(SCRIPT_DIR, "conf")
+CFG_NAME = "traffic_sign_classification_config"
 TRAIN_RESULTS_ROOT = os.path.join(WORKSPACE_DIR, "training_results")
-CFG_ROOT = os.path.join(WORKSPACE_DIR, "code", "static_gesture_classification", "conf")
-CFG_NAME = "base_traffic_sign_config"
 
 
-def load_dummy_dataset():
+os.environ["HYDRA_FULL_ERROR"] = "1"
+
+cs = ConfigStore.instance()
+cs.store(name=CFG_NAME, node=TrafficSignTrainerConfig)
+
+
+def load_dummy_dataset(label_enum: Dict[int, str]) -> Dataset:
     val_coco_file: str = "E:\\ITMO\\TrafficSignsCV\\archive (1)\\val_anno.json"
     images_root: str = "E:\\ITMO\\TrafficSignsCV\\archive (1)\\rtsd-frames"
+    label_map_file: str = "E:\\ITMO\\TrafficSignsCV\\archive (1)\\label_map.json"
     dataset = RussianTrafficSignBaseDataset(
-        coco_ann_file=val_coco_file, images_root=images_root
+        coco_ann_file=val_coco_file,
+        images_root=images_root,
+        label_map_file=label_map_file,
     )
+    dataset = LabelEnumApplier(dataset, label_enum_id2name=label_enum)
     dataset = SquareCropReader(dataset)
     dataset = Subset(dataset, indices=list(range(10)))
+    return dataset
 
 
-def load_train_dataset():
-    load_dummy_dataset()
+def load_train_dataset(label_enum: Dict[int, str]) -> Dataset:
+    return load_dummy_dataset(label_enum)
 
 
-def load_val_dataset():
-    load_dummy_dataset()
+def load_val_dataset(label_enum: Dict[int, str]) -> Dataset:
+    return load_dummy_dataset(label_enum)
 
 
 def custom_collate(batch: List[Dict[str, Any]]) -> Dict[str, Any]:
     collated_batch: Dict[str, Any] = {}
     keys = batch[0].keys()
     for key in keys:
+        if key == "datetime":
+            continue
         collated_batch[key] = default_collate([sample[key] for sample in batch])
+    collated_batch["datetime"] = [sample["datetime"] for sample in batch]
     return collated_batch
 
 
-def init_clearml_task() -> Task:
-    pass
+def init_clearml_task(task_name: str) -> Task:
+    task = Task.init(
+        project_name="TrafficSignProject",
+        task_name=task_name,
+        reuse_last_task_id=False,
+    )
+    return task
+
+
+def get_experiment_name(base_experiment_name: str, experiments_root: str):
+    existing_experiments = os.listdir(experiments_root)
+    if base_experiment_name not in existing_experiments:
+        return base_experiment_name
+    namesakes_experiments = list(
+        filter(
+            lambda name: name.startswith(f"{base_experiment_name}"),
+            existing_experiments,
+        )
+    )
+    namesakes_numbers = [0]
+    for namesake_name in namesakes_experiments:
+        try:
+            namesakes_number = int(namesake_name[len(base_experiment_name) :])
+            namesakes_numbers.append(namesakes_number)
+        except ValueError:
+            continue
+    new_exp_number = max(namesakes_numbers) + 1
+    experiment_name = f"{base_experiment_name}{new_exp_number}"
+    return experiment_name
 
 
 @hydra.main(
@@ -57,22 +111,16 @@ def init_clearml_task() -> Task:
     version_base=None,
 )
 def train_static_gesture(cfg: TrafficSignTrainerConfig):
-    run_id: str = ""
-    model_line_path: str = os.path.join(TRAIN_RESULTS_ROOT, run_id)
+    experiment_name = get_experiment_name(
+        "traffic_sign_recognition", TRAIN_RESULTS_ROOT
+    )
+    model_line_path: str = os.path.join(TRAIN_RESULTS_ROOT, experiment_name)
     model_line: ModelLine = ModelLine(model_line_path)
-    lightning_classifier = TrafficSignTrainerConfig(cfg, results_location=model_line)
-
-    # log_dict_like_structure_to_neptune(
-    #     dict_like_structure=cfg,
-    #     neptune_root="conf",
-    #     neptune_run=neptune_logger.experiment,
-    #     log_as_sequence=False,
-    # )
-    task = Task()
-    train_dataset = load_train_dataset()
-    val_dataset = load_val_dataset()
+    lightning_classifier = TrafficSignsClassifier(cfg, results_location=model_line)
+    task = init_clearml_task(experiment_name)
+    train_dataset = load_train_dataset(cfg.model.label_enum)
+    val_dataset = load_val_dataset(cfg.model.label_enum)
     augmentations = init_augmentations_from_config(augs_cfg=cfg.augs)
-
     train_dataset = TransformApplier(
         dataset=train_dataset, transformation=augmentations[DataSplit.TRAIN]
     )
@@ -133,7 +181,6 @@ def train_static_gesture(cfg: TrafficSignTrainerConfig):
         model=lightning_classifier,
         train_dataloaders=train_dataloader,
         val_dataloaders=val_dataloader,
-        ckpt_path="E:\\dev\\MyFirstDataProject\\training_results\\STAT-90\\checkpoints\\checkpoint_epoch=48-val_weighted_F1=0.87.ckpt",
     )
 
 
