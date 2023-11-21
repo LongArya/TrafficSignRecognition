@@ -15,9 +15,14 @@ from datetime import datetime
 
 
 class RussianTrafficSignBaseDataset(Dataset):
-    def __init__(self, coco_ann_file: str, images_root: str) -> None:
+    def __init__(
+        self, coco_ann_file: str, images_root: str, label_map_file: str
+    ) -> None:
         self.images_root = images_root
         self.coco_ann_file = coco_ann_file
+        with open(label_map_file, "r") as f:
+            name2id_mapping = json.load(f)
+            self.id2name_mapping = {id: name for name, id in name2id_mapping.items()}
         self.samples_info: List[Dict] = self._read_annotations_for_recognition()
 
     @staticmethod
@@ -51,9 +56,11 @@ class RussianTrafficSignBaseDataset(Dataset):
                 RussianTrafficSignBaseDataset.extract_datetime_from_filename(image_path)
             )
             for image_annotation in image_annotations:
+                class_id = image_annotation["category_id"]
                 sample_info = {
                     "image_path": image_path,
-                    "class": image_annotation["category_id"],
+                    "class": class_id,
+                    "class_name": self.id2name_mapping[class_id],
                     "bbox": image_annotation["bbox"],
                     "datetime": sample_datetime,
                 }
