@@ -1,3 +1,4 @@
+from datetime import datetime
 from torchvision.models import resnet18
 from neptune.types import File
 import matplotlib.pyplot as plt
@@ -19,6 +20,7 @@ from .classification_result_dataframe import ClassificationResultsDataframe
 from .model_line import ModelLine
 from .metrics_utils import generate_confusion_matrix_plot_from_classification_results
 from loggers.clearml_logger import ClearMLLogger
+from dataset.rtsd import RussianTrafficSignBaseDataset
 import torchvision.transforms as tf
 from functools import partial
 
@@ -116,6 +118,17 @@ def init_loss_from_config(cfg: TrafficSignTrainerConfig) -> Optional[nn.Module]:
         raise NotImplementedError(
             f"Loss {cfg.train_hyperparams.loss} is not implemented"
         )
+
+
+def label_hour(hour: str) -> str:
+    if hour < 8:
+        return "night"
+    if hour < 12:
+        return "morning"
+    if hour < 18:
+        return "day"
+    else:
+        return "evening"
 
 
 class TrafficSignsClassifier(pl.LightningModule):
@@ -251,15 +264,24 @@ class TrafficSignsClassifier(pl.LightningModule):
         plt.close(fig)
         raise NotImplementedError("TODO log conf mat to ClearML")
 
+    def _get_classification_report_from_predictions(
+        self, predictions: ClassificationResultsDataframe
+    ) -> Dict:
+        gt = predictions.ground_true.tolist()
+        pred = predictions.prediction.tolist()
+        labels_names = list(self.cfg.model.label_enum.values())
+        val_classification_report = classification_report(
+            y_true=gt, y_pred=pred, labels=labels_names, output_dict=True
+        )
+        return val_classification_report
+
     def _log_metrics_to_clearml(
         self,
         val_predictions: ClassificationResultsDataframe,
     ) -> None:
-        gt = val_predictions.ground_true.tolist()
-        pred = val_predictions.prediction.tolist()
         labels_names = list(self.cfg.model.label_enum.values())
-        val_classification_report = classification_report(
-            y_true=gt, y_pred=pred, labels=labels_names, output_dict=True
+        val_classification_report = self._get_classification_report_from_predictions(
+            val_predictions
         )
         if not isinstance(self.logger, ClearMLLogger):
             raise ValueError("Only ClearML logger is supported")
@@ -273,8 +295,65 @@ class TrafficSignsClassifier(pl.LightningModule):
             "val_weighted_F1", val_classification_report["weighted avg"]["f1-score"]
         )
 
+    def _log_metrics_for_different_seasons_and_times(
+        self, val_predictions: ClassificationResultsDataframe
+    ) -> None:
+        image_paths = val_predictions["image_path"]
+        datetimes: List[datetime] = [
+            RussianTrafficSignBaseDataset.extract_datetime_from_filename(path)
+            for path in image_paths
+        ]
+        months_names = [date.strftime("%B") for date in datetimes]
+        hours = [date.hour for date in datetimes]
+        hours_labels = [label_hour(h) for h in hours]
+        val_predictions["month_names"] = months_names
+        val_predictions["daytime"] = hours_labels
+
+        # log for every month
+        month_grouping = val_predictions.groupby(by=["month_names"])
+        logger: ClearMLLogger = self.logger
+        for month, group in month_grouping:
+            group_classification_report = (
+                self._get_classification_report_from_predictions(group)
+            )
+            logger._clearml_logger.report_scalar(
+                title="Month metrics",
+                series=month,
+                iteration=self.current_epoch,
+                value=group_classification_report["weighted avg"]["f1-score"],
+            )
+
+        # log for every daytime
+        daytime_grouping = val_predictions.groupby(by=["daytime"])
+        for daytime, group in daytime_grouping:
+            group_classification_report = (
+                self._get_classification_report_from_predictions(group)
+            )
+            logger._clearml_logger.report_scalar(
+                title="Daytime metrics",
+                series=daytime,
+                iteration=self.current_epoch,
+                value=group_classification_report["weighted avg"]["f1-score"],
+            )
+
+        # log for every month and daytime
+        daytime_grouping = val_predictions.groupby(by=["month_names", "daytime"])
+        for (month, daytime), group in daytime_grouping:
+            group_classification_report = (
+                self._get_classification_report_from_predictions(group)
+            )
+            logger._clearml_logger.report_scalar(
+                title="Month and Daytime metrics",
+                series=f"{month}@{daytime}",
+                iteration=self.current_epoch,
+                value=group_classification_report["weighted avg"]["f1-score"],
+            )
+
     def on_validation_epoch_end(self) -> None:
         self._log_metrics_to_clearml(
+            val_predictions=self.predictions_on_datasets[DataSplit.VAL]
+        )
+        self._log_metrics_for_different_seasons_and_times(
             val_predictions=self.predictions_on_datasets[DataSplit.VAL]
         )
         # save predictions locally
