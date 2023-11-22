@@ -1,5 +1,5 @@
 from datetime import datetime
-from torchvision.models import resnet18
+from torchvision.models import resnet18, resnet34, resnet50
 from neptune.types import File
 import matplotlib.pyplot as plt
 from sklearn.metrics import classification_report
@@ -30,6 +30,10 @@ def init_static_gesture_classifier(cfg: TrafficSignTrainerConfig) -> nn.Module:
     classes_num = len(cfg.model.label_enum)
     if cfg.model.architecture == "resnet18":
         model = resnet18(pretrained=cfg.model.use_pretrained)
+        model.fc = nn.Linear(model.fc.in_features, classes_num)
+        return model
+    if cfg.model.architecture == "resnet34":
+        model = resnet34(pretrained=cfg.model.use_pretrained)
         model.fc = nn.Linear(model.fc.in_features, classes_num)
         return model
     else:
