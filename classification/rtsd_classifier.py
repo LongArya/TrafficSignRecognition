@@ -23,6 +23,30 @@ from loggers.clearml_logger import ClearMLLogger
 from dataset.rtsd import RussianTrafficSignBaseDataset
 import torchvision.transforms as tf
 from functools import partial
+import albumentations as A
+from albumentations import ImageOnlyTransform
+import random
+
+
+class WeatherAugmentApplier:
+    def __init__(self, probabilty: float) -> None:
+        rain = A.RandomRain(brightness_coefficient=0.9, drop_width=1, blur_value=5, p=1)
+        snow = A.RandomSnow(
+            brightness_coeff=0.5, snow_point_lower=0.1, snow_point_upper=0.3, p=1
+        )
+        fog = A.RandomFog(fog_coef_lower=0.7, fog_coef_upper=0.8, alpha_coef=0.1, p=1)
+        self.aug_probability = probabilty
+        self.weather_transforms: List[ImageOnlyTransform] = [rain, snow, fog]
+
+    def __call__(self, image: Image) -> Image:
+        use_transform: bool = random.random() < self.aug_probability
+        if not use_transform:
+            return image
+
+        transform = random.choice(self.weather_transforms)
+        _transformed_image: np.ndarray = transform(image=np.array(image))["image"]
+        transformed_image = Image.fromarray(_transformed_image)
+        return transformed_image
 
 
 def init_static_gesture_classifier(cfg: TrafficSignTrainerConfig) -> nn.Module:
@@ -72,6 +96,9 @@ def init_augmentations_from_config(
 ) -> Dict[DataSplit, Callable[[Image.Image], torch.Tensor]]:
     """Inits augmentations for each data_split based on config values"""
     resize = tf.Resize(augs_cfg.input_resolution)
+    weather_augmentation = WeatherAugmentApplier(
+        probabilty=augs_cfg.augmentation_probability
+    )
     normalization = tf.Compose(
         [
             tf.ToTensor(),
@@ -100,6 +127,7 @@ def init_augmentations_from_config(
     train_aug = tf.Compose(
         [
             resize,
+            weather_augmentation,
             tf.RandomApply(
                 transforms=[augmentation_transform], p=augs_cfg.augmentation_probability
             ),
