@@ -27,9 +27,11 @@ class ONNXTrafficSignClassifier:
     """Class for encapsulating inference of model trained for traffic sign classification via ONNX"""
 
     def __init__(self, model_path: str, label_id2name_file: str):
-        self.ort_sess = onnxruntime.InferenceSession(
-            model_path, providers=["CUDAExecutionProvider"]
-        )
+        sess_opt = onnxruntime.SessionOptions()
+        sess_opt.intra_op_num_threads = 6
+        sess_opt.inter_op_num_threads = 6
+        sess_opt.execution_mode = onnxruntime.ExecutionMode.ORT_PARALLEL
+        self.ort_sess = onnxruntime.InferenceSession(model_path, sess_opt, providers=["CPUExecutionProvider"])
         with open(label_id2name_file, "r") as f:
             self._label_id2name = json.load(f)
         self._label_id2name = {int(k): v for k, v in self._label_id2name.items()}
@@ -39,7 +41,7 @@ class ONNXTrafficSignClassifier:
 
     def _preprocessing(self, input_image: np.ndarray) -> np.ndarray:
         network_input = input_image.astype(np.float32)
-        network_input = cv2.resize(network_input, self._input_size)
+        network_input = cv2.resize(network_input, self._input_size, interpolation=cv2.INTER_NEAREST)
         network_input /= 255
         network_input -= self._imagenet_mean
         network_input /= self._imagenet_std
@@ -54,9 +56,7 @@ class ONNXTrafficSignClassifier:
         predicted_sign: str = self._label_id2name[pred_class_index]
         return predicted_sign, prediction_probability
 
-    def _prepare_square_crop(
-        self, image: np.ndarray, bbox_xyxy: List[float]
-    ) -> Tuple[str, float]:
+    def _prepare_square_crop(self, image: np.ndarray, bbox_xyxy: List[float]) -> Tuple[str, float]:
         x1, y1, x2, y2 = bbox_xyxy
         xc = (x1 + x2) // 2
         yc = (y1 + y2) // 2
@@ -85,9 +85,7 @@ class ONNXTrafficSignClassifier:
 
 
 def example_onnx_infer(onnx_model_path: str, label_enum_file: str):
-    classifier = ONNXTrafficSignClassifier(
-        model_path=onnx_model_path, label_id2name_file=label_enum_file
-    )
+    classifier = ONNXTrafficSignClassifier(model_path=onnx_model_path, label_id2name_file=label_enum_file)
     img = cv2.imread(EXAMPLE_IMAGE)
     img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
     x1, y1, w, h = EXAMPLE_XYWH_BBOX
